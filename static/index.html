@@ -1,41 +1,22 @@
+<!--static/index.html-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vocabulary Builder App</title>
-  <link rel="stylesheet" href="styles.css"> <!-- Link to your styles.css file -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vocabulary Builder Stages</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div class="container">
-    <div class="question-container">
-      <div id="question-text"></div>
-      <img id="question-image" src="" alt="Question Image">
-      <code>Data Set:</code>
-      <div id="progress-counter"></div>
-      <div class="progress-bar-container">
-        <div id="progress-bar"></div>
-      </div>      
-      <code>Mastered:</code>
-      <div id="mastered-counter"></div>
-      <div class="progress-bar-container">
-        <div id="mastered-bar"></div>
-      </div>      
-      <code>Learning:</code>
-      <div id="learning-counter"></div>
-      <div class="progress-bar-container">
-        <div id="learning-bar"></div>
-      </div>    
-    </div>
-    <div class="answer-container">
-      <input type="button" class="answer-button" name="answer" onclick="quiz.checkAnswer(0)">
-      <input type="button" class="answer-button" name="answer" onclick="quiz.checkAnswer(1)">
-      <input type="button" class="answer-button" name="answer" onclick="quiz.checkAnswer(2)">
-      <input type="button" class="answer-button" name="answer" onclick="quiz.checkAnswer(3)">
-    </div>
-  </div>
-  <script src="script.js"></script>
+    <div id="stages-container"></div>
+    <form id="create-stage-form">
+        <label for="stage-name">Stage Name:</label>
+        <input type="text" id="stage-name" required><br>
+        <label for="stage-urls">Stage URLs:</label>
+        <ul id="stage-urls"></ul>
+        <button type="button" onclick="addUrlInputs()">Add URLs</button><br>
+        <button type="submit">Create Stage</button>
+    </form>
+    <script src="script.js"></script>
 </body>
 </html>
-
-

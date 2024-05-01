@@ -3,24 +3,19 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/lib/pq"
+	_ "github.com/lib/pq"
 )
 
-// Define a struct to represent a single dataset item
-type DataSet struct {
-	ID         int      `json:"id"`
-	Category   string   `json:"category"`
-	Question   string   `json:"question"`
-	TargetWord string   `json:"targetWord"`
-	Picture    string   `json:"picture"`
-	Answers    []string `json:"answers"`
-	Correct    int      `json:"correct"`
+// Stage represents a single stage item
+type Stage struct {
+	ID        int               `json:"id"`
+	StageName string            `json:"stage_name"`
+	Stages    map[string]string `json:"stages"`
 }
 
 var db *sql.DB
@@ -28,7 +23,7 @@ var db *sql.DB
 func main() {
 	// Initialize database connection
 	var err error
-	db, err = sql.Open("postgres", "postgres://tavito:mamacita@localhost:5432/data_set?sslmode=disable")
+	db, err = sql.Open("postgres", "postgres://tavito:mamacita@localhost:5432/stages?sslmode=disable")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -37,224 +32,215 @@ func main() {
 	r := mux.NewRouter()
 
 	// Define API endpoints
-	r.HandleFunc("/dataset", getDataSet).Methods("GET")
-	r.HandleFunc("/dataset/{id}", getDataSetByID).Methods("GET")
-	r.HandleFunc("/dataset/{category}", getDataSetByCategory).Methods("GET")
-	r.HandleFunc("/dataset", createDataSet).Methods("POST")
-	r.HandleFunc("/dataset/{id}", updateDataSet).Methods("PUT")
-	r.HandleFunc("/dataset/{id}", deleteDataSet).Methods("DELETE")
+	r.HandleFunc("/stages", getStages).Methods("GET")
+	r.HandleFunc("/stages/{id}", getStageByID).Methods("GET")
+	r.HandleFunc("/stages", createStage).Methods("POST")
+	r.HandleFunc("/stages/{id}", updateStage).Methods("PUT")
+	r.HandleFunc("/stages/{id}", deleteStage).Methods("DELETE")
 
 	// Serve static files from the "static" directory
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("static"))))
 
-	log.Println("Server started on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	// Add CORS middleware
+	r.Use(corsMiddleware)
+
+	log.Println("Server started on port 8000")
+	log.Fatal(http.ListenAndServe(":8000", r))
 }
 
-// Handler functions
-func getDataSet(w http.ResponseWriter, r *http.Request) {
-	// Query all dataset items from the database
-	rows, err := db.Query("SELECT id, category, question, targetWord, picture, answers, correct FROM data_set")
+// Middleware function to add CORS headers
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// getStages retrieves all stages from the database
+func getStages(w http.ResponseWriter, r *http.Request) {
+	// Query to fetch all stages from the database
+	rows, err := db.Query("SELECT id, stage_name, stages FROM stages")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Println("Error querying database:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
 
-	// Iterate over the rows and build the dataset slice
-	var dataset []DataSet
+	// Initialize a slice to store retrieved stages
+	var allStages []Stage
+
+	// Iterate through query results and append each stage to the slice
 	for rows.Next() {
-		var item DataSet
-		err := rows.Scan(&item.ID, &item.Category, &item.Question, &item.TargetWord, &item.Picture, pq.Array(&item.Answers), &item.Correct)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		var stage Stage
+		var stagesJSON []byte
+		if err := rows.Scan(&stage.ID, &stage.StageName, &stagesJSON); err != nil {
+			log.Println("Error scanning row:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		dataset = append(dataset, item)
-	}
-	if err := rows.Err(); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 
-	// Respond with the dataset in the JSON format
-	json.NewEncoder(w).Encode(dataset)
-}
-
-func getDataSetByID(w http.ResponseWriter, r *http.Request) {
-	// Extract the dataset ID from the request URL
-	vars := mux.Vars(r)
-	id, err := strconv.Atoi(vars["id"])
-	if err != nil {
-		http.Error(w, "Invalid dataset ID", http.StatusBadRequest)
-		return
-	}
-
-	// Query the dataset item from the database by ID
-	var dataset DataSet
-	query := "SELECT category, question, targetWord, picture, answers, correct FROM data_set WHERE id = $1"
-	err = db.QueryRow(query, id).Scan(&dataset.Category, &dataset.Question, &dataset.TargetWord, &dataset.Picture, pq.Array(&dataset.Answers), &dataset.Correct)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "Dataset item not found", http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-
-	// Respond with the dataset item in the JSON format
-	json.NewEncoder(w).Encode(dataset)
-}
-
-func getDataSetByCategory(w http.ResponseWriter, r *http.Request) {
-	// Extract the category from the request URL
-	vars := mux.Vars(r)
-	category := vars["category"]
-
-	log.Printf("Received request to fetch dataset for category: %s\n", category)
-
-	// Query dataset items from the database by category
-	rows, err := db.Query("SELECT id, question, targetWord, picture, answers, correct FROM data_set WHERE category = $1", category)
-	if err != nil {
-		log.Printf("Error querying database: %v\n", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
-
-	// Iterate over the rows and build the dataset slice
-	var dataset []DataSet
-	for rows.Next() {
-		var item DataSet
-		err := rows.Scan(&item.ID, &item.Question, &item.TargetWord, &item.Picture, pq.Array(&item.Answers), &item.Correct)
-		if err != nil {
-			log.Printf("Error scanning row: %v\n", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Unmarshal the JSON-encoded stages string into a map[string]string
+		if err := json.Unmarshal(stagesJSON, &stage.Stages); err != nil {
+			log.Println("Error decoding stages JSON:", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		dataset = append(dataset, item)
+
+		allStages = append(allStages, stage)
 	}
 	if err := rows.Err(); err != nil {
-		log.Printf("Error iterating over rows: %v\n", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Println("Error iterating rows:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("Found %d dataset items for category: %s\n", len(dataset), category)
-
-	// Respond with the dataset in the JSON format
-	json.NewEncoder(w).Encode(dataset)
+	// Encode the slice of stages as JSON and write it to the response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(allStages); err != nil {
+		log.Println("Error encoding JSON:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
-func createDataSet(w http.ResponseWriter, r *http.Request) {
-	// Decode the request body into a DataSet struct
-	var dataset DataSet
-	err := json.NewDecoder(r.Body).Decode(&dataset)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Insert the dataset item into the database
-	query := `
-        INSERT INTO data_set (category, question, targetWord, picture, answers, correct )
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id
-    `
-	var id int
-	err = db.QueryRow(
-		query,
-		dataset.Category,
-		dataset.Question,
-		dataset.TargetWord,
-		dataset.Picture,
-		pq.Array(dataset.Answers),
-		dataset.Correct,
-	).Scan(&id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Respond with the ID of the newly created dataset item
-	response := map[string]int{"id": id}
-	json.NewEncoder(w).Encode(response)
-}
-
-func updateDataSet(w http.ResponseWriter, r *http.Request) {
-	// Log that the updateDataSet handler function has been called
-	log.Println("updateDataSet handler function called")
-
-	// Extract the dataset ID from the request URL
+// getStageByID retrieves a specific stage by ID from the database
+func getStageByID(w http.ResponseWriter, r *http.Request) {
+	// Extract stage ID from URL parameters
 	vars := mux.Vars(r)
 	id, err := strconv.Atoi(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid dataset ID", http.StatusBadRequest)
-		log.Println("Invalid dataset ID:", err)
+		http.Error(w, "Invalid stage ID", http.StatusBadRequest)
 		return
 	}
 
-	// Decode the request body into a DataSet struct
-	var dataset DataSet
-	err = json.NewDecoder(r.Body).Decode(&dataset)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		log.Println("Error decoding JSON:", err)
+	// Query to fetch stage by ID from the database
+	row := db.QueryRow("SELECT stage_name, stages FROM stages WHERE id = $1", id)
+
+	// Initialize a Stage struct to store the retrieved stage
+	var stage Stage
+	var stagesJSON []byte
+
+	// Scan the query result into the Stage struct
+	err = row.Scan(&stage.StageName, &stagesJSON)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Stage not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		log.Println("Error querying database:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Log the received dataset
-	log.Printf("Received dataset: %+v", dataset)
-
-	// Update the dataset item in the database
-	query := `
-        UPDATE data_set
-        SET question = $1, targetWord = $2, picture = $3, answers = $4, correct = $5
-        WHERE id = $6
-    `
-	_, err = db.Exec(
-		query,
-		dataset.Question,
-		dataset.TargetWord,
-		dataset.Picture,
-		pq.Array(dataset.Answers),
-		dataset.Correct,
-		id,
-	)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		log.Println("Error updating dataset in database:", err)
+	// Unmarshal the JSON-encoded stages string into a map[string]string
+	if err := json.Unmarshal(stagesJSON, &stage.Stages); err != nil {
+		log.Println("Error decoding stages JSON:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// Log that the dataset item has been updated successfully
-	log.Println("Dataset item updated successfully")
-
-	// Respond with success message
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Dataset item updated successfully")
+	// Encode the retrieved stage as JSON and write it to the response
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(stage); err != nil {
+		log.Println("Error encoding JSON:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
-func deleteDataSet(w http.ResponseWriter, r *http.Request) {
-	// Extract the dataset ID from the request URL
+// createStage creates a new stage in the database
+func createStage(w http.ResponseWriter, r *http.Request) {
+	// Parse request body to get the new stage details
+	var stage Stage
+	err := json.NewDecoder(r.Body).Decode(&stage)
+	if err != nil {
+		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
+		return
+	}
+
+	// Convert the stages map to a JSON-encoded string
+	stagesJSON, err := json.Marshal(stage.Stages)
+	if err != nil {
+		log.Println("Error encoding stages map to JSON:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Insert the new stage into the database
+	_, err = db.Exec("INSERT INTO stages (stage_name, stages) VALUES ($1, $2)", stage.StageName, stagesJSON)
+	if err != nil {
+		log.Println("Error inserting into database:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set the response status code to 201 Created
+	w.WriteHeader(http.StatusCreated)
+}
+
+// updateStage updates an existing stage in the database
+func updateStage(w http.ResponseWriter, r *http.Request) {
+	// Extract stage ID from URL parameters
 	vars := mux.Vars(r)
 	id, err := strconv.Atoi(vars["id"])
 	if err != nil {
-		http.Error(w, "Invalid dataset ID", http.StatusBadRequest)
+		http.Error(w, "Invalid stage ID", http.StatusBadRequest)
 		return
 	}
 
-	// Delete the dataset item from the database
-	_, err = db.Exec("DELETE FROM data_set WHERE id = $1", id)
+	// Parse request body to get the updated stage details
+	var updatedStage Stage
+	err = json.NewDecoder(r.Body).Decode(&updatedStage)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Failed to decode request body", http.StatusBadRequest)
 		return
 	}
 
-	// Respond with success message
+	// Convert the stages map to a JSON-encoded string
+	stagesJSON, err := json.Marshal(updatedStage.Stages)
+	if err != nil {
+		log.Println("Error encoding stages map to JSON:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Update the existing stage in the database
+	_, err = db.Exec("UPDATE stages SET stage_name = $1, stages = $2 WHERE id = $3", updatedStage.StageName, stagesJSON, id)
+	if err != nil {
+		log.Println("Error updating database:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set the response status code to 200 OK
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Dataset item deleted successfully")
+}
+
+// deleteStage deletes a stage from the database
+func deleteStage(w http.ResponseWriter, r *http.Request) {
+	// Extract stage ID from URL parameters
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
+	if err != nil {
+		http.Error(w, "Invalid stage ID", http.StatusBadRequest)
+		return
+	}
+
+	// Delete the stage from the database
+	_, err = db.Exec("DELETE FROM stages WHERE id = $1", id)
+	if err != nil {
+		log.Println("Error deleting from database:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 }
 
 /*
@@ -263,71 +249,60 @@ psql
 
 \l
 
-CREATE DATABASE data_set;
+CREATE DATABASE stages;
 
-DROP DATABASE data_set;     //for deleting a database
+DROP DATABASE stages;     //for deleting a database
 
-\c data_set
+\c stages
 
 pwd
 
-\i /Users/tavito/Documents/go/vocabulary-builder-with-picture/data_set.sql
+\i /Users/tavito/Documents/go/vocabulary-builder-stages-API/stages.sql
 
 \dt
 
 
 ////////////////Curl Commands///////////////////
 
+curl -X GET http://localhost:8000/stages
+
+curl -X GET http://localhost:8000/stages/{id}
+
 curl -X POST \
-  -H "Content-Type: application/json" \
+  http://localhost:8000/stages \
+  -H 'Content-Type: application/json' \
   -d '{
-    "id": 7,
-    "category": "hard-word",
-    "question": "Huawei have been hoarding parts in anticipation of a ban and have sought other suppliers",
-    "targetWord": "hoarding",
-    "picture": "https://www.shutterstock.com/shutterstock/photos/1363334219/display_1500/stock-photo-carlos-barbosa-rio-grande-do-sul-brasil-april-interior-of-auto-parts-store-1363334219.jpg",
-    "answers": [
-      "v. keeping for future",
-      "v. wasting",
-      "v. needing",
-      "v. buying"
-    ],
-    "correct": 0
-  }' \
-  http://localhost:8080/dataset
+	"stage_name": "IELTS",
+	"stages": {
+		"listening": "http://localhost:8080/dataset/category/listening",
+		"reading": "http://localhost:8080/dataset/category/reading",
+		"writing": "http://localhost:8080/dataset/category/writing",
+		"speaking": "http://localhost:8080/dataset/category/speaking"
+	}
+}'
 
-
-curl -X PUT -H "Content-Type: application/json" -d '{
-    "question": "Updated question",
-    "targetWord": "updated";2B,
-    "picture": "https://example.com/updated.jpg",
-    "answers": ["updated answer 1", "updated answer 2", "updated answer 3", "updated answer 4"],
-    "correct": 1
-}' http://localhost:8080/dataset/6
+curl -X POST \
+  http://localhost:8000/stages \
+  -H 'Content-Type: application/json' \
+  -d '{
+	"stage_name": "IELTS",
+	"stages": {
+	  "easy-stage": "http://localhost:8080/dataset/category/easy-word",
+  	  "hard-stage": "http://localhost:8080/dataset/category/hard-word"
+	}
+}'
 
 curl -X PUT \
-  -H "Content-Type: application/json" \
+  http://localhost:8000/stages/2 \
+  -H 'Content-Type: application/json' \
   -d '{
-    "question": "Huawei have been hoarding parts in anticipation of a ban and have sought other suppliers",
-    "targetWord": "hoarding",
-    "picture": "https://www.shutterstock.com/shutterstock/photos/1363334219/display_1500/stock-photo-carlos-barbosa-rio-grande-do-sul-brasil-april-interior-of-auto-parts-store-1363334219.jpg",
-    "answers": [
-      "v. keeping for future",
-      "v. wasting",
-      "v. needing",
-      "v. buying"
-    ],
-    "correct": 0
-  }' \
-  http://localhost:8080/dataset/6
+	"stage_name": "TOEFL",
+	"stages": {
+	  "easy-stage": "http://localhost:8080/dataset/category/easy-word",
+  	  "hard-stage": "http://localhost:8080/dataset/category/hard-word"
+	}
+}'
 
-
-
-curl -X GET \
-  'http://localhost:8080/dataset/easy-word'
-
-
-curl -X DELETE http://localhost:8080/dataset/1
-
+curl -X DELETE http://localhost:8000/stages/{id}
 
 */
